@@ -1,0 +1,42 @@
+name: Build and ClamAV Scan
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: temurin
+          cache: gradle
+      - run: chmod +x gradlew && ./gradlew assembleDebug
+      - name: Install ClamAV and update signatures
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clamav
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam
+      - name: Scan APK
+        run: |
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          sha256sum "$APK" | tee sha.txt
+          set +e
+          clamscan -r --infected --max-filesize=200M --max-scansize=500M "$APK" | tee scan.txt
+          RC=${PIPESTATUS[0]}
+          set -e
+          SIG=$(clamscan --version)
+          SUMMARY=$(grep -E "Infected files|Scanned files|Time" scan.txt | tr '\n' ' ')
+          HASH=$(cut -d' ' -f1 sha.txt)
+          echo "::notice title=CLAMAV_RESULT::rc=$RC | $SIG | $SUMMARY | sha256=$HASH"
+          exit $RC
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scan-report
+          path: |
+            scan.txt
+            sha.txt
